@@ -14,6 +14,7 @@ import string
 import time
 from typing import Callable, Optional, Tuple
 
+from core.playwright_browser import launch_chromium_with_fallback
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -59,10 +60,18 @@ class GrokRegister:
         if self.proxy:
             launch_kwargs["proxy"] = {"server": self.proxy}
         try:
-            browser = playwright.chromium.launch(**launch_kwargs)
+            browser = launch_chromium_with_fallback(
+                playwright.chromium,
+                launch_kwargs,
+                log_fn=self.log,
+            )
         except Exception:
             launch_kwargs.pop("channel", None)
-            browser = playwright.chromium.launch(**launch_kwargs)
+            browser = launch_chromium_with_fallback(
+                playwright.chromium,
+                launch_kwargs,
+                log_fn=self.log,
+            )
         return playwright, browser
 
     def _goto_email_signup(self, page) -> None:

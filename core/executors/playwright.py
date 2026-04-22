@@ -1,6 +1,7 @@
 """Playwright 执行器 - 支持 headless/headed 模式"""
 
 from ..base_executor import BaseExecutor, Response
+from ..playwright_browser import launch_chromium_with_fallback
 from ..proxy_utils import build_playwright_proxy_config
 
 
@@ -20,7 +21,7 @@ class PlaywrightExecutor(BaseExecutor):
         launch_opts = {"headless": self.headless}
         if self.proxy:
             launch_opts["proxy"] = build_playwright_proxy_config(self.proxy)
-        self._browser = self._pw.chromium.launch(**launch_opts)
+        self._browser = launch_chromium_with_fallback(self._pw.chromium, launch_opts)
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
 

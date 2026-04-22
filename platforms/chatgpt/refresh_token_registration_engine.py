@@ -149,6 +149,7 @@ class RefreshTokenRegistrationEngine:
         self._token_acquisition_requires_login: bool = False  # 新注册账号需要二次登录拿 token
         self._post_otp_continue_url: str = ""
         self._post_otp_page_type: str = ""
+        self._auth_block_reason: str = ""
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -568,6 +569,12 @@ class RefreshTokenRegistrationEngine:
         self._otp_sent_at = None
         self._post_otp_continue_url = ""
         self._post_otp_page_type = ""
+        self._auth_block_reason = ""
+
+    @staticmethod
+    def _normalize_auth_page_type(value: str) -> str:
+        """统一 OpenAI page.type 的命名风格，兼容 about-you / about_you。"""
+        return str(value or "").strip().lower().replace("-", "_")
 
     def _prepare_authorize_flow(self, label: str) -> Tuple[Optional[str], Optional[str]]:
         """初始化当前阶段的授权流程，返回 device id 和 sentinel token。"""
@@ -607,7 +614,9 @@ class RefreshTokenRegistrationEngine:
 
         # 检查是否进入 add_phone 页面（需要手机号验证）
         # 尝试多种方法绕过 add_phone 页面
-        post_page_type = getattr(self, "_post_otp_page_type", "") or ""
+        post_page_type = self._normalize_auth_page_type(
+            getattr(self, "_post_otp_page_type", "") or ""
+        )
         if post_page_type.lower() == "add_phone":
             self._log("OpenAI 要求绑定手机号，尝试多种方法绕过...", "warning")
             
@@ -645,7 +654,7 @@ class RefreshTokenRegistrationEngine:
                 self._log(f"访问 consent 页面异常: {e}", "warning")
             
             # 方法 2：如果方法 1 失败，尝试访问 about-you 页面
-            if getattr(self, "_post_otp_page_type", "") == "add_phone":
+            if self._normalize_auth_page_type(getattr(self, "_post_otp_page_type", "")) == "add_phone":
                 self._log("尝试 2：访问 about-you 页面建立 Cookie...")
                 try:
                     about_resp = self.session.get(
@@ -666,7 +675,7 @@ class RefreshTokenRegistrationEngine:
                     self._log(f"访问 about-you 异常: {e}", "warning")
             
             # 方法 3：检查 workspace cookie 是否已存在
-            if getattr(self, "_post_otp_page_type", "") == "add_phone":
+            if self._normalize_auth_page_type(getattr(self, "_post_otp_page_type", "")) == "add_phone":
                 self._log("尝试 3：检查 workspace cookie 是否已存在...")
                 workspace_id = self._get_workspace_id()
                 if workspace_id:
@@ -682,8 +691,10 @@ class RefreshTokenRegistrationEngine:
                     return False
         
         # 检查是否进入 about_you 页面（需要完成用户信息设置）
-        post_page_type = getattr(self, "_post_otp_page_type", "") or ""
-        if post_page_type.lower() == "about_you":
+        post_page_type = self._normalize_auth_page_type(
+            getattr(self, "_post_otp_page_type", "") or ""
+        )
+        if post_page_type == "about_you":
             self._log("验证码校验后进入 about-you 页面，访问页面以完成 Cookie 设置...", "info")
             try:
                 about_you_url = "https://auth.openai.com/about-you"
@@ -1189,14 +1200,55 @@ class RefreshTokenRegistrationEngine:
             body_preview = response.text[:200]
             self._log(f"账户创建失败: {body_preview}", "warning")
 
+            if response.status_code == 400 and "already_exists" in body_preview.lower():
+                self._log("create_account 返回 already_exists，按账户已创建继续流程...", "warning")
+                return True
+
             should_retry = response.status_code in (400, 403) and (
                 "sentinel" in body_preview.lower()
                 or "registration_disallowed" in body_preview.lower()
+                or "invalid_auth_step" in body_preview.lower()
             )
             if not should_retry:
                 return False
 
-            self._log("create_account 命中 sentinel 校验，刷新 token 后重试一次...", "warning")
+            if "invalid_auth_step" in body_preview.lower():
+                self._log(
+                    "create_account 命中 invalid_auth_step，先补齐 about-you/consent 状态后重试一次...",
+                    "warning",
+                )
+                try:
+                    repaired_url = self._resolve_post_otp_continue_url()
+                    callback_url = self._extract_callback_url_from_candidate(repaired_url)
+                    if repaired_url and not callback_url:
+                        nav_resp = self.session.get(
+                            repaired_url,
+                            headers=self._build_navigation_headers(
+                                referer="https://auth.openai.com/about-you"
+                            ),
+                            allow_redirects=True,
+                            timeout=30,
+                        )
+                        final_url = normalize_flow_url(
+                            str(nav_resp.url or ""),
+                            auth_base="https://auth.openai.com",
+                        )
+                        self._log(
+                            f"invalid_auth_step 修复导航状态: {nav_resp.status_code}, 最终 URL: {final_url}",
+                            "info",
+                        )
+                        if final_url:
+                            self._post_otp_continue_url = final_url
+                            if "add-phone" in final_url:
+                                self._auth_block_reason = "add_phone"
+                                self._post_otp_page_type = "add_phone"
+                                self._log("invalid_auth_step 修复后命中 add-phone，当前会话需要手机号验证", "warning")
+                                return False
+                    time.sleep(random.uniform(1.0, 2.0))
+                except Exception as e:
+                    self._log(f"invalid_auth_step 修复导航异常: {e}", "warning")
+
+            self._log("create_account 命中风控/流程校验，刷新 token 后重试一次...", "warning")
             retry_token = self._check_sentinel(
                 self._device_id or "",
                 flow="oauth_create_account",
@@ -1211,6 +1263,11 @@ class RefreshTokenRegistrationEngine:
             )
             self._log(f"账户创建重试状态: {retry_resp.status_code}")
             if retry_resp.status_code == 200:
+                return True
+
+            retry_preview = retry_resp.text[:200]
+            if retry_resp.status_code == 400 and "already_exists" in retry_preview.lower():
+                self._log("create_account 重试返回 already_exists，按账户已创建继续流程...", "warning")
                 return True
 
             self._log(f"账户创建重试失败: {retry_resp.text[:200]}", "warning")
@@ -1353,7 +1410,7 @@ class RefreshTokenRegistrationEngine:
             self._post_otp_continue_url,
             auth_base="https://auth.openai.com",
         )
-        page_type = str(self._post_otp_page_type or "").strip().lower()
+        page_type = self._normalize_auth_page_type(self._post_otp_page_type or "")
 
         if continue_url and "about-you" in continue_url:
             self._log("OTP 后进入 about-you，按参考 RT 逻辑补齐 consent 跳转...")
@@ -1727,6 +1784,7 @@ class RefreshTokenRegistrationEngine:
             self._device_id = None
             self._post_otp_continue_url = ""
             self._post_otp_page_type = ""
+            self._auth_block_reason = ""
             self._used_verification_codes.clear()
 
             self._log("=" * 60)
@@ -1796,8 +1854,11 @@ class RefreshTokenRegistrationEngine:
 
                 self._log("9. 创建用户账户...")
                 if not self._create_user_account():
-                    result.error_message = "创建用户账户失败"
-                    if self.email:
+                    if self._auth_block_reason == "add_phone":
+                        result.error_message = "注册失败：OpenAI 要求绑定手机号"
+                    else:
+                        result.error_message = "创建用户账户失败"
+                    if self.email and self._auth_block_reason != "add_phone":
                         self._check_email_domain_and_suggest()
                     return result
 

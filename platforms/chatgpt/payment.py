@@ -201,6 +201,8 @@ def open_url_incognito(url: str, cookies_str: Optional[str] = None) -> bool:
     """用 Playwright 以无痕模式打开 URL，可注入 cookie"""
     import threading
 
+    from core.playwright_browser import launch_chromium_with_fallback
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -210,7 +212,11 @@ def open_url_incognito(url: str, cookies_str: Optional[str] = None) -> bool:
     def _launch():
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=False, args=["--incognito"])
+                browser = launch_chromium_with_fallback(
+                    p.chromium,
+                    {"headless": False, "args": ["--incognito"]},
+                    log_fn=logger.warning,
+                )
                 ctx = browser.new_context()
                 if cookies_str:
                     ctx.add_cookies(_parse_cookie_str(cookies_str, "chatgpt.com"))

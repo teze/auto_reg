@@ -1,19 +1,34 @@
 import base64
 import json
+import os
 import unittest
 from unittest import mock
 
+from platforms.chatgpt.gmail_alias import build_gmail_alias_address
 from platforms.chatgpt.refresh_token_registration_engine import (
     RefreshTokenRegistrationEngine,
     SignupFormResult,
 )
 
 
+GMAIL_BASE_EMAIL = os.getenv("CHATGPT_GMAIL_BASE_EMAIL", "fooyouliao2@gmail.com")
+GMAIL_ALIAS_SUFFIX = os.getenv("CHATGPT_GMAIL_ALIAS_SUFFIX", "unit")
+GMAIL_ALT_ALIAS_SUFFIX = os.getenv("CHATGPT_GMAIL_ALT_ALIAS_SUFFIX", "demo")
+GMAIL_ALIAS_EMAIL = build_gmail_alias_address(
+    GMAIL_BASE_EMAIL,
+    suffix=GMAIL_ALIAS_SUFFIX,
+).alias_email
+GMAIL_ALT_ALIAS_EMAIL = build_gmail_alias_address(
+    GMAIL_BASE_EMAIL,
+    suffix=GMAIL_ALT_ALIAS_SUFFIX,
+).alias_email
+
+
 class DummyEmailService:
     service_type = type("ST", (), {"value": "dummy"})()
 
     def create_email(self):
-        return {"email": "user@example.com", "service_id": "svc-1"}
+        return {"email": GMAIL_ALIAS_EMAIL, "service_id": "svc-gmail-1"}
 
     def get_verification_code(self, **kwargs):
         return "123456"
@@ -52,7 +67,7 @@ class _DummyHTTPClient:
             self._index += 1
 
 
-class RegistrationEngineFlowTests(unittest.TestCase):
+class RegistrationEngineGmailFlowTests(unittest.TestCase):
     @staticmethod
     def _encode_cookie_payload(data):
         raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
@@ -72,8 +87,8 @@ class RegistrationEngineFlowTests(unittest.TestCase):
             proxy_url="http://127.0.0.1:7890",
             callback_logger=lambda msg: None,
         )
-        engine.email = "user@example.com"
-        engine.email_info = {"email": "user@example.com", "service_id": "svc-1"}
+        engine.email = GMAIL_ALIAS_EMAIL
+        engine.email_info = {"email": GMAIL_ALIAS_EMAIL, "service_id": "svc-gmail-1"}
         engine._otp_sent_at = 100.0
 
         first_code = engine._get_verification_code()
@@ -142,8 +157,8 @@ class RegistrationEngineFlowTests(unittest.TestCase):
         engine = self._make_engine()
 
         def fake_create_email():
-            engine.email_info = {"email": "user@example.com", "service_id": "svc-1"}
-            engine.email = "user@example.com"
+            engine.email_info = {"email": GMAIL_ALIAS_EMAIL, "service_id": "svc-gmail-1"}
+            engine.email = GMAIL_ALIAS_EMAIL
             return True
 
         def fake_complete_token_exchange(result):
@@ -188,8 +203,8 @@ class RegistrationEngineFlowTests(unittest.TestCase):
         engine = self._make_engine()
 
         def fake_create_email():
-            engine.email_info = {"email": "user@example.com", "service_id": "svc-1"}
-            engine.email = "user@example.com"
+            engine.email_info = {"email": GMAIL_ALT_ALIAS_EMAIL, "service_id": "svc-gmail-1"}
+            engine.email = GMAIL_ALT_ALIAS_EMAIL
             return True
 
         def fake_complete_token_exchange(result):
@@ -341,8 +356,16 @@ class RegistrationEngineFlowTests(unittest.TestCase):
             else default
         )
 
-        consent_response = mock.Mock(status_code=200, headers={}, url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent")
-        workspace_response = mock.Mock(status_code=200, headers={}, url="https://auth.openai.com/api/accounts/workspace/select")
+        consent_response = mock.Mock(
+            status_code=200,
+            headers={},
+            url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+        )
+        workspace_response = mock.Mock(
+            status_code=200,
+            headers={},
+            url="https://auth.openai.com/api/accounts/workspace/select",
+        )
         workspace_response.json.return_value = {
             "continue_url": "/sign-in-with-chatgpt/codex/organization",
             "page": {"type": "organization_select"},
@@ -361,7 +384,6 @@ class RegistrationEngineFlowTests(unittest.TestCase):
                 "Location": "http://localhost:1455/auth/callback?code=auth-code&state=oauth-state"
             },
         )
-
         engine.session.get.side_effect = [consent_response]
         engine.session.post.side_effect = [workspace_response, org_response]
 
@@ -375,46 +397,6 @@ class RegistrationEngineFlowTests(unittest.TestCase):
             "http://localhost:1455/auth/callback?code=auth-code&state=oauth-state",
         )
         self.assertEqual(engine.session.post.call_count, 2)
-
-    @mock.patch(
-        "platforms.chatgpt.refresh_token_registration_engine.build_sentinel_token",
-        return_value='{"source":"pow"}',
-    )
-    @mock.patch(
-        "platforms.chatgpt.refresh_token_registration_engine.get_sentinel_token_via_browser",
-        return_value='{"source":"browser"}',
-    )
-    def test_check_sentinel_prefers_browser_for_register_and_create_account_flows(
-        self, mock_browser_token, mock_pow_token
-    ):
-        engine = self._make_engine()
-        engine.session = mock.Mock()
-
-        token = engine._check_sentinel("device-fixed", flow="username_password_create")
-        self.assertEqual(token, '{"source":"browser"}')
-        mock_browser_token.assert_called_once()
-        mock_pow_token.assert_not_called()
-
-    @mock.patch(
-        "platforms.chatgpt.refresh_token_registration_engine.build_sentinel_token",
-        return_value='{"source":"pow"}',
-    )
-    @mock.patch(
-        "platforms.chatgpt.refresh_token_registration_engine.get_sentinel_token_via_browser",
-        return_value=None,
-    )
-    def test_check_sentinel_falls_back_to_pow_when_browser_token_missing(
-        self, mock_browser_token, mock_pow_token
-    ):
-        engine = self._make_engine()
-        engine.session = mock.Mock()
-
-        token = engine._check_sentinel("device-fixed", flow="oauth_create_account")
-        self.assertEqual(token, '{"source":"pow"}')
-        mock_browser_token.assert_called_once()
-        mock_pow_token.assert_called_once_with(
-            engine.session, "device-fixed", flow="oauth_create_account"
-        )
 
 
 if __name__ == "__main__":

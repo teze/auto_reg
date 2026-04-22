@@ -222,6 +222,15 @@ const TAB_ITEMS = [
         ],
       },
       {
+        title: 'Gmail Alias 测试',
+        desc: '供 Gmail 测试入口读取，用于生成 Gmail 别名测试地址',
+        fields: [
+          { key: 'chatgpt_gmail_base_email', label: '基础 Gmail', placeholder: 'fooyouliao2@gmail.com' },
+          { key: 'chatgpt_gmail_alias_suffix', label: '主别名后缀', placeholder: 'unit' },
+          { key: 'chatgpt_gmail_alt_alias_suffix', label: '备用别名后缀', placeholder: 'demo' },
+        ],
+      },
+      {
         title: 'Sub2API 面板',
         desc: '注册完成后自动上传到 Sub2API 管理后台',
         fields: [

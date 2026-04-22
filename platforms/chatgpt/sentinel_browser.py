@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional
 
+from core.playwright_browser import launch_chromium_with_fallback
 from core.proxy_utils import build_playwright_proxy_config
 
 
@@ -55,7 +56,11 @@ def get_sentinel_token_via_browser(
     logger(f"Sentinel Browser 启动参数: {launch_args}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(**launch_args)
+        browser = launch_chromium_with_fallback(
+            p.chromium,
+            launch_args,
+            log_fn=logger,
+        )
         try:
             context = browser.new_context(
                 viewport={"width": 1440, "height": 900},

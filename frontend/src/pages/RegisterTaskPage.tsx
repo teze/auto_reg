@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  App,
   Card,
   Form,
   Input,
@@ -27,11 +28,38 @@ import { getExecutorOptions, normalizeExecutorForPlatform } from '@/lib/platform
 import { apiFetch } from '@/lib/utils'
 
 const { Text } = Typography
+const DEFAULT_GMAIL_BASE_EMAIL = 'fooyouliao2@gmail.com'
+const DEFAULT_GMAIL_ALIAS_SUFFIX = 'unit'
+const DEFAULT_GMAIL_ALT_ALIAS_SUFFIX = 'demo'
+
+function normalizeGmailBaseAddress(value: string | undefined) {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text || !text.includes('@')) return ''
+
+  const [localPart, domain] = text.split('@', 2)
+  const canonicalLocal = String(localPart || '').split('+', 1)[0].trim()
+  if (!canonicalLocal) return ''
+  if (!['gmail.com', 'googlemail.com'].includes(String(domain || '').trim())) return ''
+
+  return `${canonicalLocal}@gmail.com`
+}
+
+function buildGmailAliasAddress(baseEmail: string, suffix: string) {
+  const normalizedBase = normalizeGmailBaseAddress(baseEmail)
+  if (!normalizedBase) return ''
+
+  const [localPart] = normalizedBase.split('@', 1)
+  const resolvedSuffix = String(suffix || '').trim().toLowerCase()
+  if (!resolvedSuffix) return ''
+
+  return `${localPart}+${resolvedSuffix}@gmail.com`
+}
 
 export default function RegisterTaskPage() {
   const [form] = Form.useForm()
   const [task, setTask] = useState<any>(null)
   const [polling, setPolling] = useState(false)
+  const { message } = App.useApp()
   const { mode: chatgptRegistrationMode, setMode: setChatgptRegistrationMode } =
     usePersistentChatGPTRegistrationMode()
 
@@ -75,6 +103,9 @@ export default function RegisterTaskPage() {
         cfworker_subdomain: cfg.cfworker_subdomain || '',
         cfworker_random_subdomain: parseBooleanConfigValue(cfg.cfworker_random_subdomain),
         cfworker_fingerprint: cfg.cfworker_fingerprint || '',
+        chatgpt_gmail_base_email: cfg.chatgpt_gmail_base_email || '',
+        chatgpt_gmail_alias_suffix: cfg.chatgpt_gmail_alias_suffix || '',
+        chatgpt_gmail_alt_alias_suffix: cfg.chatgpt_gmail_alt_alias_suffix || '',
         smstome_cookie: cfg.smstome_cookie || '',
         smstome_country_slugs: cfg.smstome_country_slugs || '',
         smstome_phone_attempts: cfg.smstome_phone_attempts || '',
@@ -136,6 +167,9 @@ export default function RegisterTaskPage() {
       cfworker_subdomain: values.cfworker_subdomain,
       cfworker_random_subdomain: values.cfworker_random_subdomain,
       cfworker_fingerprint: values.cfworker_fingerprint,
+      chatgpt_gmail_base_email: values.chatgpt_gmail_base_email,
+      chatgpt_gmail_alias_suffix: values.chatgpt_gmail_alias_suffix,
+      chatgpt_gmail_alt_alias_suffix: values.chatgpt_gmail_alt_alias_suffix,
       smstome_cookie: values.smstome_cookie,
       smstome_country_slugs: values.smstome_country_slugs,
       smstome_phone_attempts: values.smstome_phone_attempts,
@@ -206,7 +240,18 @@ export default function RegisterTaskPage() {
   const mailProvider = Form.useWatch('mail_provider', form)
   const captchaSolver = Form.useWatch('captcha_solver', form)
   const platform = Form.useWatch('platform', form)
+  const watchedGmailBaseEmail = Form.useWatch('chatgpt_gmail_base_email', form)
+  const watchedGmailAliasSuffix = Form.useWatch('chatgpt_gmail_alias_suffix', form)
+  const watchedGmailAltAliasSuffix = Form.useWatch('chatgpt_gmail_alt_alias_suffix', form)
   const executorOptions = getExecutorOptions(platform)
+  const normalizedGmailBaseEmail =
+    normalizeGmailBaseAddress(watchedGmailBaseEmail) || DEFAULT_GMAIL_BASE_EMAIL
+  const resolvedGmailAliasSuffix =
+    String(watchedGmailAliasSuffix || '').trim().toLowerCase() || DEFAULT_GMAIL_ALIAS_SUFFIX
+  const resolvedGmailAltAliasSuffix =
+    String(watchedGmailAltAliasSuffix || '').trim().toLowerCase() || DEFAULT_GMAIL_ALT_ALIAS_SUFFIX
+  const primaryGmailAlias = buildGmailAliasAddress(normalizedGmailBaseEmail, resolvedGmailAliasSuffix)
+  const secondaryGmailAlias = buildGmailAliasAddress(normalizedGmailBaseEmail, resolvedGmailAltAliasSuffix)
 
   useEffect(() => {
     const currentExecutor = form.getFieldValue('executor_type')
@@ -215,6 +260,16 @@ export default function RegisterTaskPage() {
       form.setFieldValue('executor_type', normalizedExecutor)
     }
   }, [form, platform])
+
+  const copyToClipboard = async (value: string, label: string) => {
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      message.success(`${label}已复制`)
+    } catch {
+      message.error(`${label}复制失败`)
+    }
+  }
 
   return (
     <div style={{ maxWidth: 800 }}>
@@ -442,6 +497,57 @@ export default function RegisterTaskPage() {
             </>
           )}
         </Card>
+
+        {platform === 'chatgpt' && (
+          <Card title="Gmail Alias 覆盖" style={{ marginBottom: 16 }}>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              这里是实用工具卡：直接预览并复制 Gmail 别名地址。留空时自动使用默认值。
+            </Text>
+            <Form.Item name="chatgpt_gmail_base_email" label="基础 Gmail">
+              <Input placeholder="fooyouliao2@gmail.com" />
+            </Form.Item>
+            <Form.Item name="chatgpt_gmail_alias_suffix" label="主别名后缀">
+              <Input placeholder="unit" />
+            </Form.Item>
+            <Form.Item name="chatgpt_gmail_alt_alias_suffix" label="备用别名后缀">
+              <Input placeholder="demo" />
+            </Form.Item>
+            <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              <Descriptions size="small" column={1} bordered>
+                <Descriptions.Item label="基础 Gmail">
+                  <Space wrap>
+                    <Text code>{normalizedGmailBaseEmail}</Text>
+                    <Button size="small" onClick={() => copyToClipboard(normalizedGmailBaseEmail, '基础 Gmail')}>
+                      复制
+                    </Button>
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="主别名地址">
+                  <Space wrap>
+                    <Text code>{primaryGmailAlias || '-'}</Text>
+                    <Button size="small" onClick={() => copyToClipboard(primaryGmailAlias, '主别名地址')}>
+                      复制主别名
+                    </Button>
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="备用别名地址">
+                  <Space wrap>
+                    <Text code>{secondaryGmailAlias || '-'}</Text>
+                    <Button size="small" onClick={() => copyToClipboard(secondaryGmailAlias, '备用别名地址')}>
+                      复制备用别名
+                    </Button>
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="当前后缀">
+                  <Space wrap>
+                    <Text code>{resolvedGmailAliasSuffix}</Text>
+                    <Text code>{resolvedGmailAltAliasSuffix}</Text>
+                  </Space>
+                </Descriptions.Item>
+              </Descriptions>
+            </Space>
+          </Card>
+        )}
 
         {platform === 'chatgpt' && (
           <Card title="ChatGPT 手机验证" style={{ marginBottom: 16 }}>

@@ -54,6 +54,12 @@ class TaskLogBatchDeleteRequest(BaseModel):
     ids: list[int]
 
 
+class GmailTestRunRequest(BaseModel):
+    chatgpt_gmail_base_email: Optional[str] = None
+    chatgpt_gmail_alias_suffix: Optional[str] = None
+    chatgpt_gmail_alt_alias_suffix: Optional[str] = None
+
+
 def _log(task_id: str, msg: str):
     """向任务追加一条日志"""
     ts = time.strftime("%H:%M:%S")
@@ -259,6 +265,18 @@ def create_register_task(
                            "progress": f"0/{req.count}", "logs": []}
     background_tasks.add_task(_run_register, task_id, req)
     return {"task_id": task_id}
+
+
+@router.post("/chatgpt/gmail-test")
+def run_chatgpt_gmail_test(req: GmailTestRunRequest):
+    from tests.test_gmail_register_entry import run_gmail_register_suite
+
+    overrides = {
+        key: value
+        for key, value in req.model_dump().items()
+        if str(value or "").strip()
+    }
+    return run_gmail_register_suite(config_overrides=overrides)
 
 
 @router.get("/logs")

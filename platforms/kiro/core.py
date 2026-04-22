@@ -25,6 +25,7 @@ except ImportError:
     cffi_requests = None
 
 from playwright.sync_api import sync_playwright, TimeoutError, Page, Locator
+from core.playwright_browser import launch_chromium_with_fallback
 
 try:
     from playwright_stealth import stealth_sync
@@ -233,7 +234,11 @@ class KiroRegister:
         if self.proxy:
             launch_opts["proxy"] = {"server": self.proxy}
 
-        self.browser = self.pw.chromium.launch(**launch_opts)
+        self.browser = launch_chromium_with_fallback(
+            self.pw.chromium,
+            launch_opts,
+            log_fn=self.log,
+        )
         profile = self._build_random_profile()
 
         env_locale = os.getenv("KIRO_LOCALE", "").strip()
